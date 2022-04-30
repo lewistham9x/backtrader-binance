@@ -28,6 +28,17 @@ class BinanceOrder(OrderBase):
         super(BinanceOrder, self).__init__()
         self.accept()
 
+    def execute(self, dt, size, price,
+                closed, closedvalue, closedcomm,
+                opened, openedvalue, openedcomm,
+                margin, pnl,
+                psize, pprice):
+
+        super(BinanceOrder, self).execute(dt, size, price,
+                                   closed, closedvalue, closedcomm,
+                                   opened, openedvalue, openedcomm,
+                                   margin, pnl, psize, pprice)
+
 
 class BinanceBroker(BrokerBase):
     _ORDER_TYPES = {
@@ -61,6 +72,7 @@ class BinanceBroker(BrokerBase):
         pos.update(copysign(executed_size, order.size), executed_price)
 
     def _handle_user_socket_message(self, msg):
+        # print("MSG:", msg)
         """https://binance-docs.github.io/apidocs/spot/en/#payload-order-update"""
         if msg['e'] == 'executionReport':
             if msg['s'] == self._store.symbol:
@@ -70,7 +82,7 @@ class BinanceBroker(BrokerBase):
                             date = dt.datetime.fromtimestamp(msg['T'] / 1000)
                             executed_size = float(msg['l'])
                             executed_price = float(msg['L'])
-                            self._execute_order(o, dt, executed_size, executed_price)
+                            self._execute_order(o, date, executed_size, executed_price)
                         self._set_order_status(o, msg['X'])
 
                         if o.status not in [Order.Accepted, Order.Partial]:
