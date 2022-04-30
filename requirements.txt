@@ -1,4 +1,4 @@
 backtrader
 matplotlib
 pandas
-python-binance
+python-binance==1.0.12
