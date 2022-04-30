@@ -1,166 +1,165 @@
-import datetime as dt
+import time
 
-from collections import defaultdict, deque
-from math import copysign
+from functools import wraps
+from math import floor
 
-from backtrader.broker import BrokerBase
-from backtrader.order import Order, OrderBase
-from backtrader.position import Position
+from backtrader.dataseries import TimeFrame
+from binance import Client, ThreadedWebsocketManager
 from binance.enums import *
+from binance.exceptions import BinanceAPIException
+from requests.exceptions import ConnectTimeout, ConnectionError
+
+from .binance_broker import BinanceBroker
+from .binance_feed import BinanceData
 
 
-class BinanceOrder(OrderBase):
-    def __init__(self, owner, data, exectype, binance_order):
-        self.owner = owner
-        self.data = data
-        self.exectype = exectype
-        self.ordtype = self.Buy if binance_order['side'] == SIDE_BUY else self.Sell
-        
-        # Market order price is zero
-        if self.exectype == Order.Market:
-            self.size = float(binance_order['executedQty'])
-            self.price = sum(float(fill['price']) for fill in binance_order['fills']) / len(binance_order['fills'])  # Average price
-        else:
-            self.size = float(binance_order['origQty'])
-            self.price = float(binance_order['price'])
-        self.binance_order = binance_order
-        
-        super(BinanceOrder, self).__init__()
-        self.accept()
-
-    def execute(self, dt, size, price,
-                closed, closedvalue, closedcomm,
-                opened, openedvalue, openedcomm,
-                margin, pnl,
-                psize, pprice):
-
-        super(BinanceOrder, self).execute(dt, size, price,
-                                   closed, closedvalue, closedcomm,
-                                   opened, openedvalue, openedcomm,
-                                   margin, pnl, psize, pprice)
-
-
-class BinanceBroker(BrokerBase):
-    _ORDER_TYPES = {
-        Order.Limit: ORDER_TYPE_LIMIT,
-        Order.Market: ORDER_TYPE_MARKET,
-        Order.Stop: ORDER_TYPE_STOP_LOSS,
-        Order.StopLimit: ORDER_TYPE_STOP_LOSS_LIMIT,
+class BinanceStore(object):
+    _GRANULARITIES = {
+        (TimeFrame.Minutes, 1): KLINE_INTERVAL_1MINUTE,
+        (TimeFrame.Minutes, 3): KLINE_INTERVAL_3MINUTE,
+        (TimeFrame.Minutes, 5): KLINE_INTERVAL_5MINUTE,
+        (TimeFrame.Minutes, 15): KLINE_INTERVAL_15MINUTE,
+        (TimeFrame.Minutes, 30): KLINE_INTERVAL_30MINUTE,
+        (TimeFrame.Minutes, 60): KLINE_INTERVAL_1HOUR,
+        (TimeFrame.Minutes, 120): KLINE_INTERVAL_2HOUR,
+        (TimeFrame.Minutes, 240): KLINE_INTERVAL_4HOUR,
+        (TimeFrame.Minutes, 360): KLINE_INTERVAL_6HOUR,
+        (TimeFrame.Minutes, 480): KLINE_INTERVAL_8HOUR,
+        (TimeFrame.Minutes, 720): KLINE_INTERVAL_12HOUR,
+        (TimeFrame.Days, 1): KLINE_INTERVAL_1DAY,
+        (TimeFrame.Days, 3): KLINE_INTERVAL_3DAY,
+        (TimeFrame.Weeks, 1): KLINE_INTERVAL_1WEEK,
+        (TimeFrame.Months, 1): KLINE_INTERVAL_1MONTH,
     }
 
-    def __init__(self, store):
-        super(BinanceBroker, self).__init__()
+    def __init__(self, api_key, api_secret, base, quote, testnet=False, retries=5):
+        self.binance = Client(api_key, api_secret, testnet=testnet)
+        self.binance_socket = ThreadedWebsocketManager(api_key, api_secret, testnet=testnet)
+        self.binance_socket.daemon = True
+        self.binance_socket.start()
+        self.base = base
+        self.quote = quote
+        self.symbol = base + quote
+        self.retries = retries
 
-        self.notifs = deque()
-        self.positions = defaultdict(Position)
+        self._cash = 0
+        self._value = 0
+        self.get_balance()
 
-        self.open_orders = list()
-    
-        self._store = store
-        self._store.binance_socket.start_user_socket(self._handle_user_socket_message)
+        self._step_size = None
+        self._tick_size = None
+        self.get_filters()
 
-    def _execute_order(self, order, date, executed_size, executed_price):
-        order.execute(
-            date,
-            executed_size,
-            executed_price,
-            0, 0.0, 0.0,
-            0, 0.0, 0.0,
-            0.0, 0.0,
-            0, 0.0)
-        pos = self.getposition(order.data, clone=False)
-        pos.update(copysign(executed_size, order.size), executed_price)
-
-    def _handle_user_socket_message(self, msg):
-        # print("MSG:", msg)
-        """https://binance-docs.github.io/apidocs/spot/en/#payload-order-update"""
-        if msg['e'] == 'executionReport':
-            if msg['s'] == self._store.symbol:
-                for o in self.open_orders:
-                    if o.binance_order['orderId'] == msg['i']:
-                        if msg['X'] in [ORDER_STATUS_FILLED, ORDER_STATUS_PARTIALLY_FILLED]:
-                            date = dt.datetime.fromtimestamp(msg['T'] / 1000)
-                            executed_size = float(msg['l'])
-                            executed_price = float(msg['L'])
-                            self._execute_order(o, date, executed_size, executed_price)
-                        self._set_order_status(o, msg['X'])
-
-                        if o.status not in [Order.Accepted, Order.Partial]:
-                            self.open_orders.remove(o)
-                        self.notify(o)
-        elif msg['e'] == 'error':
-            raise msg
-    
-    def _set_order_status(self, order, binance_order_status):
-        if binance_order_status == ORDER_STATUS_CANCELED:
-            order.cancel()
-        elif binance_order_status == ORDER_STATUS_EXPIRED:
-            order.expire()
-        elif binance_order_status == ORDER_STATUS_FILLED:
-            order.completed()
-        elif binance_order_status == ORDER_STATUS_PARTIALLY_FILLED:
-            order.partial()
-        elif binance_order_status == ORDER_STATUS_REJECTED:
-            order.reject()
-
-    def _submit(self, owner, data, side, exectype, size, price):
-        type = self._ORDER_TYPES.get(exectype, ORDER_TYPE_MARKET)
-
-        binance_order = self._store.create_order(side, type, size, price)
-        order = BinanceOrder(owner, data, exectype, binance_order)
-        if binance_order['status'] in [ORDER_STATUS_FILLED, ORDER_STATUS_PARTIALLY_FILLED]:
-            self._execute_order(
-                order,
-                dt.datetime.fromtimestamp(binance_order['transactTime'] / 1000),
-                float(binance_order['executedQty']),
-                float(binance_order['price']))
-        self._set_order_status(order, binance_order['status'])
-        if order.status == Order.Accepted:
-            self.open_orders.append(order)
-        self.notify(order)
-        return order
-
-    def buy(self, owner, data, size, price=None, plimit=None,
-            exectype=None, valid=None, tradeid=0, oco=None,
-            trailamount=None, trailpercent=None,
-            **kwargs):
-        return self._submit(owner, data, SIDE_BUY, exectype, size, price)
-
-    def cancel(self, order):
-        order_id = order.binance_order['orderId']
-        self._store.cancel_order(order_id)
+        self._broker = BinanceBroker(store=self)
+        self._data = None
         
-    def format_price(self, value):
-        return self._store.format_price(value)
+    def _format_value(self, value, step):
+        precision = step.find('1') - 1
+        if precision > 0:
+            return '{:0.0{}f}'.format(value, precision)
+        return floor(int(value))
+        
+    def retry(func):
+        @wraps(func)
+        def wrapper(self, *args, **kwargs):
+            for attempt in range(1, self.retries + 1):
+                time.sleep(60 / 1200) # API Rate Limit
+                try:
+                    return func(self, *args, **kwargs)
+                except (BinanceAPIException, ConnectTimeout, ConnectionError) as err:
+                    if isinstance(err, BinanceAPIException) and err.code == -1021:
+                        # Recalculate timestamp offset between local and Binance's server
+                        res = self.binance.get_server_time()
+                        self.binance.timestamp_offset = res['serverTime'] - int(time.time() * 1000)
+                    
+                    if attempt == self.retries:
+                        raise
+        return wrapper
 
+    @retry
+    def cancel_open_orders(self):
+        orders = self.binance.get_open_orders(symbol=self.symbol)
+        if len(orders) > 0:
+            self.binance._request_api('delete', 'openOrders', signed=True, data={ 'symbol': self.symbol })
+
+    @retry
+    def cancel_order(self, order_id):
+        try:
+            self.binance.cancel_order(symbol=self.symbol, orderId=order_id)
+        except BinanceAPIException as api_err:
+            if api_err.code == -2011:  # Order filled
+                return
+            else:
+                raise api_err
+        except Exception as err:
+            raise err
+    
+    @retry
+    def create_order(self, side, type, size, price):
+        params = dict()
+        if type in [ORDER_TYPE_LIMIT, ORDER_TYPE_STOP_LOSS_LIMIT]:
+            params.update({
+                'timeInForce': TIME_IN_FORCE_GTC
+            })
+        if type != ORDER_TYPE_MARKET:
+            params.update({
+                'price': self.format_price(price)
+            })
+
+        # order = dict(symbol=self.symbol,
+        #     side=side,
+        #     type=type,
+        #     quantity=self.format_quantity(size),
+        #     **params)
+        # print('ORDER:', order)
+
+        return self.binance.create_order(
+            symbol=self.symbol,
+            side=side,
+            type=type,
+            quantity=self.format_quantity(size),
+            **params)
+
+    def format_price(self, price):
+        return self._format_value(price, self._tick_size)
+    
+    def format_quantity(self, size):
+        return self._format_value(size, self._step_size)
+
+    @retry
     def get_asset_balance(self, asset):
-        return self._store.get_asset_balance(asset)
+        balance = self.binance.get_asset_balance(asset)
+        return float(balance['free']), float(balance['locked'])
 
-    def getcash(self):
-        self.cash = self._store._cash
-        return self.cash
+    def get_balance(self):
+        free, locked = self.get_asset_balance(self.quote)
+        self._cash = free
+        self._value = free + locked
 
-    def get_notification(self):
-        if not self.notifs:
-            return None
+    def getbroker(self):
+        return self._broker
 
-        return self.notifs.popleft()
+    def getdata(self, timeframe_in_minutes, start_date=None):
+        if not self._data:
+            self._data = BinanceData(store=self, timeframe_in_minutes=timeframe_in_minutes, start_date=start_date)
+        return self._data
 
-    def getposition(self, data, clone=True):
-        pos = self.positions[data._dataname]
-        if clone:
-            pos = pos.clone()
-        return pos
+    def get_filters(self):
+        symbol_info = self.get_symbol_info(self.symbol)
+        # print("SYMBOL INFO:", symbol_info)
+        for f in symbol_info['filters']:
+            if f['filterType'] == 'LOT_SIZE':
+                self._step_size = f['stepSize']
+            elif f['filterType'] == 'PRICE_FILTER':
+                self._tick_size = f['tickSize']
 
-    def getvalue(self, datas=None):
-        self.value = self._store._value
-        return self.value
+    def get_interval(self, timeframe, compression):
+        return self._GRANULARITIES.get((timeframe, compression))
 
-    def notify(self, order):
-        self.notifs.append(order)
+    @retry
+    def get_symbol_info(self, symbol):
+        return self.binance.get_symbol_info(symbol)
 
-    def sell(self, owner, data, size, price=None, plimit=None,
-             exectype=None, valid=None, tradeid=0, oco=None,
-             trailamount=None, trailpercent=None,
-             **kwargs):
-        return self._submit(owner, data, SIDE_SELL, exectype, size, price)
+    def stop_socket(self):
+        self.binance_socket.stop()
+        self.binance_socket.join(5)
