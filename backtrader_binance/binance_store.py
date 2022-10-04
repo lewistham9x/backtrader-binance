@@ -37,9 +37,6 @@ class BinanceStore(object):
         self.binance_socket = ThreadedWebsocketManager(api_key, api_secret, testnet=testnet)
         self.binance_socket.daemon = True
         self.binance_socket.start()
-        self.base = base
-        self.quote = quote
-        self.symbol = base + quote
         self.retries = retries
 
         self._cash = 0

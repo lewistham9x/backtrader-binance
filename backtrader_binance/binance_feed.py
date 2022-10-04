@@ -15,9 +15,12 @@ class BinanceData(DataBase):
     # States for the Finite State Machine in _load
     _ST_LIVE, _ST_HISTORBACK, _ST_OVER = range(3)
 
-    def __init__(self, store, timeframe_in_minutes, start_date=None):
+    def __init__(self, store, timeframe_in_minutes, base, quote, start_date=None):
         self.timeframe_in_minutes = timeframe_in_minutes
         self.start_date = start_date
+        self.base = base
+        self.quote = quote
+        self.symbol = base+quote
 
         self._store = store
         self._data = deque()
@@ -99,7 +102,7 @@ class BinanceData(DataBase):
             self.put_notification(self.NOTSUPPORTED_TF)
             return
         
-        self.symbol_info = self._store.get_symbol_info(self._store.symbol)
+        self.symbol_info = self._store.get_symbol_info(self.symbol)
         if self.symbol_info is None:
             self._state = self._ST_OVER
             self.put_notification(self.NOTSUBSCRIBED)
