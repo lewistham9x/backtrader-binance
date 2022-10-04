@@ -95,7 +95,7 @@ class BinanceStore(object):
             raise err
 
     @retry
-    def create_order(self, side, type, size, price):
+    def create_order(self, symbol, side, type, size, price):
         params = dict()
         if type in [ORDER_TYPE_LIMIT, ORDER_TYPE_STOP_LOSS_LIMIT]:
             params.update({"timeInForce": TIME_IN_FORCE_GTC})
@@ -103,7 +103,7 @@ class BinanceStore(object):
             params.update({"price": price})
 
         return self.binance.create_order(
-            symbol=self.symbol, side=side, type=type, quantity=size, **params
+            symbol=symbol, side=side, type=type, quantity=size, **params
         )
 
     @retry
@@ -125,7 +125,8 @@ class BinanceStore(object):
     def getbroker(self):
         return self._broker
 
-    def getdata(self, timeframe_in_minutes, base, quote, start_date=None):
+    def getdata(self, timeframe_in_minutes, start_date=None, base=None, quote=None):
+
         return BinanceData(
             store=self,
             timeframe_in_minutes=timeframe_in_minutes,
