@@ -117,12 +117,18 @@ class BinanceStore(object):
         return self._format_value(size, self._step_size)
 
     @retry
-    def get_asset_balance(self, asset):
-        balance = self.binance.get_asset_balance(asset)
-        return float(balance['free']), float(balance['locked'])
+    def get_asset_balance(self):
+        balance = self.binance.get_account()["balances"]
+        
+        # sum up all the free and locked balances
+        
+        free = sum(float(b["free"]) for b in balance)
+        locked = sum(float(b["locked"]) for b in balance) 
+        
+        return free, locked
 
     def get_balance(self):
-        free, locked = self.get_asset_balance(self.quote)
+        free, locked = self.get_asset_balance()
         self._cash = free
         self._value = free + locked
 
@@ -134,13 +140,13 @@ class BinanceStore(object):
             self._data = BinanceData(store=self, timeframe_in_minutes=timeframe_in_minutes, start_date=start_date)
         return self._data
         
-    def get_filters(self):
-        symbol_info = self.get_symbol_info(self.symbol)
-        for f in symbol_info['filters']:
-            if f['filterType'] == 'LOT_SIZE':
-                self._step_size = f['stepSize']
-            elif f['filterType'] == 'PRICE_FILTER':
-                self._tick_size = f['tickSize']
+    # def get_filters(self):
+    #     symbol_info = self.get_symbol_info(self.symbol)
+    #     for f in symbol_info['filters']:
+    #         if f['filterType'] == 'LOT_SIZE':
+    #             self._step_size = f['stepSize']
+    #         elif f['filterType'] == 'PRICE_FILTER':
+    #             self._tick_size = f['tickSize']
 
     def get_interval(self, timeframe, compression):
         return self._GRANULARITIES.get((timeframe, compression))
