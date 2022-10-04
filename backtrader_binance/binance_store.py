@@ -32,7 +32,7 @@ class BinanceStore(object):
         (TimeFrame.Months, 1): KLINE_INTERVAL_1MONTH,
     }
 
-    def __init__(self, api_key, api_secret, base, quote, testnet=False, retries=5):
+    def __init__(self, api_key, api_secret, testnet=False, retries=5):
         self.binance = Client(api_key, api_secret, testnet=testnet)
         self.binance_socket = ThreadedWebsocketManager(api_key, api_secret, testnet=testnet)
         self.binance_socket.daemon = True
