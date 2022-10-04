@@ -34,7 +34,9 @@ class BinanceStore(object):
 
     def __init__(self, api_key, api_secret, testnet=False, retries=5):
         self.binance = Client(api_key, api_secret, testnet=testnet)
-        self.binance_socket = ThreadedWebsocketManager(api_key, api_secret, testnet=testnet)
+        self.binance_socket = ThreadedWebsocketManager(
+            api_key, api_secret, testnet=testnet
+        )
         self.binance_socket.daemon = True
         self.binance_socket.start()
         self.retries = retries
@@ -43,38 +45,42 @@ class BinanceStore(object):
         self._value = 0
         self.get_balance()
 
-
         self._broker = BinanceBroker(store=self)
         self._data = None
-        
+
     def _format_value(self, value, step):
-        precision = step.find('1') - 1
+        precision = step.find("1") - 1
         if precision > 0:
-            return '{:0.0{}f}'.format(value, precision)
+            return "{:0.0{}f}".format(value, precision)
         return floor(int(value))
-        
+
     def retry(func):
         @wraps(func)
         def wrapper(self, *args, **kwargs):
             for attempt in range(1, self.retries + 1):
-                time.sleep(60 / 1200) # API Rate Limit
+                time.sleep(60 / 1200)  # API Rate Limit
                 try:
                     return func(self, *args, **kwargs)
                 except (BinanceAPIException, ConnectTimeout, ConnectionError) as err:
                     if isinstance(err, BinanceAPIException) and err.code == -1021:
                         # Recalculate timestamp offset between local and Binance's server
                         res = self.binance.get_server_time()
-                        self.binance.timestamp_offset = res['serverTime'] - int(time.time() * 1000)
-                    
+                        self.binance.timestamp_offset = res["serverTime"] - int(
+                            time.time() * 1000
+                        )
+
                     if attempt == self.retries:
                         raise
+
         return wrapper
 
     @retry
     def cancel_open_orders(self):
         orders = self.binance.get_open_orders(symbol=self.symbol)
         if len(orders) > 0:
-            self.binance._request_api('delete', 'openOrders', signed=True, data={ 'symbol': self.symbol })
+            self.binance._request_api(
+                "delete", "openOrders", signed=True, data={"symbol": self.symbol}
+            )
 
     @retry
     def cancel_order(self, order_id):
@@ -87,36 +93,28 @@ class BinanceStore(object):
                 raise api_err
         except Exception as err:
             raise err
-    
+
     @retry
     def create_order(self, side, type, size, price):
         params = dict()
         if type in [ORDER_TYPE_LIMIT, ORDER_TYPE_STOP_LOSS_LIMIT]:
-            params.update({
-                'timeInForce': TIME_IN_FORCE_GTC
-            })
+            params.update({"timeInForce": TIME_IN_FORCE_GTC})
         if type != ORDER_TYPE_MARKET:
-            params.update({
-                'price': price
-            })
+            params.update({"price": price})
 
         return self.binance.create_order(
-            symbol=self.symbol,
-            side=side,
-            type=type,
-            quantity=size,
-            **params)
-
+            symbol=self.symbol, side=side, type=type, quantity=size, **params
+        )
 
     @retry
     def get_asset_balance(self):
         balance = self.binance.get_account()["balances"]
-        
+
         # sum up all the free and locked balances
-        
+
         free = sum(float(b["free"]) for b in balance)
-        locked = sum(float(b["locked"]) for b in balance) 
-        
+        locked = sum(float(b["locked"]) for b in balance)
+
         return free, locked
 
     def get_balance(self):
@@ -127,11 +125,18 @@ class BinanceStore(object):
     def getbroker(self):
         return self._broker
 
-    def getdata(self, timeframe_in_minutes, start_date=None, base=None, quote=None):
+    def getdata(self, timeframe_in_minutes, base, quote, start_date=None):
         if not self._data:
-            self._data = BinanceData(store=self, timeframe_in_minutes=timeframe_in_minutes, base=base, quote=quote, start_date=start_date)
+            self._data = BinanceData(
+                store=self,
+                timeframe_in_minutes=timeframe_in_minutes,
+                base=base,
+                quote=quote,
+                start_date=start_date,
+            )
+
         return self._data
-        
+
     # def get_filters(self):
     #     symbol_info = self.get_symbol_info(self.symbol)
     #     for f in symbol_info['filters']:
