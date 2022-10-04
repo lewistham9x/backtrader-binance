@@ -19,7 +19,6 @@ class BinanceData(DataBase):
         self.base = base
         self.quote = quote
         self.symbol = base + quote
-        print(self.symbol)
 
         self._store = store
         self._data = deque()
@@ -94,6 +93,7 @@ class BinanceData(DataBase):
 
     def start(self):
         DataBase.start(self)
+        print(self.timeframe_in_minutes)
 
         self.interval = self._store.get_interval(
             TimeFrame.Minutes, self.timeframe_in_minutes
