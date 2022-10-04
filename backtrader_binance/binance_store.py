@@ -43,9 +43,6 @@ class BinanceStore(object):
         self._value = 0
         self.get_balance()
 
-        self._step_size = None
-        self._tick_size = None
-        self.get_filters()
 
         self._broker = BinanceBroker(store=self)
         self._data = None
@@ -100,21 +97,16 @@ class BinanceStore(object):
             })
         if type != ORDER_TYPE_MARKET:
             params.update({
-                'price': self.format_price(price)
+                'price': price
             })
 
         return self.binance.create_order(
             symbol=self.symbol,
             side=side,
             type=type,
-            quantity=self.format_quantity(size),
+            quantity=size,
             **params)
 
-    def format_price(self, price):
-        return self._format_value(price, self._tick_size)
-    
-    def format_quantity(self, size):
-        return self._format_value(size, self._step_size)
 
     @retry
     def get_asset_balance(self):
