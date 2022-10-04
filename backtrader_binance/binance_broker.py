@@ -11,17 +11,6 @@ from binance.enums import *
 
 class BinanceOrder(OrderBase):
     
-    def execute(self, dt, size, price,
-                closed, closedvalue, closedcomm,
-                opened, openedvalue, openedcomm,
-                margin, pnl,
-                psize, pprice):
-
-        super(Order, self).execute(dt, size, price,
-                                   closed, closedvalue, closedcomm,
-                                   opened, openedvalue, openedcomm,
-                                   margin, pnl, psize, pprice)
-
     def __init__(self, owner, data, exectype, binance_order):
         self.owner = owner
         self.data = data
